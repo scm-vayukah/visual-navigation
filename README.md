@@ -1,151 +1,192 @@
+# Drone Image Geolocation
 
-
-# Drone Image Geolocation using Orthoimage (SIFT + EXIF)
-
-This project estimates the GPS coordinates of drone images by matching them against a georeferenced orthoimage using SIFT feature matching. The resulting geolocation is embedded directly into the image's EXIF metadata, and the output is saved in both `.JPG` and `.TIFF` formats.
+This project implements a visual localization system for drones. It estimates the drone's position by matching live or recorded drone images against a georeferenced base map image (TIFF). The system supports multiple feature detectors such as SIFT, ORB, and CUDA ORB.
 
 ---
 
 ## Folder Structure
 
 ```
-location_estimator/
-├── 720p/                   # Resized drone images at 1280x720 (input)
-├── 1080p/                  # Resized drone images at 1920x1080 (input)
-├── output/                 # Final geotagged outputs per version
-├── ortho_image.tif         # Georeferenced input orthoimage
-├── estimation.py           # Script for high-resource CPU systems
-├── est.py                  # Optimized version for Raspberry Pi (low memory)
-├── est1.py                 # Processes images in both 720p and 1080p folders
-├── resize.py               # Script to create 720p and 1080p versions of images
-├── requirements.txt        # Python package requirements
-└── README.md               # Project documentation
+visual-navigation/
+├── main.py
+├── requirements.txt
+├── Drone_images/
+│ └── README.md
+├── Tiff/
+│ └── README.md
+└── src/
+ ├── feature_extractor.py
+ ├── image_matcher.py
+ ├── tiff_tiler.py
+ └── utils.py
+
 ```
 
 ---
 
-## Input/Output Dataset
+## How It Works
 
-**Link to Input & Output Data**  :  [Click here](https://drive.google.com/drive/folders/16USVXG7BJE_eZ0p2p4KOHHLDbqOfbR-Z?usp=drive_link)
-
-This folder contains:
-- **Missing input data** (original drone images to be processed)
-- **Output data** including `.JPG` and `.TIFF` images with GPS coordinates embedded in the EXIF metadata and overlaid on the image
-
----
-
-## Script Overview
-
-| Script          | Purpose                                                               | Platform          |
-| --------------- | --------------------------------------------------------------------- | ----------------- |
-| `estimation.py` | Uses full-resolution orthoimage                                       | CPU-based systems |
-| `est.py`        | Uses a downsampled orthoimage to save memory                          | Raspberry Pi      |
-| `est1.py`       | Automatically processes images from both `720p/` and `1080p/` folders | Raspberry Pi     |
-| `resize.py`     | Converts original drone images into 720p and 1080p                    | All platforms     |
-
-**Note**: File paths and image names are currently hardcoded. Update them in the scripts if your data or filenames change.
+1. A large georeferenced TIFF image (orthomosaic or satellite image) is loaded and tiled into smaller square images.
+2. Features are extracted from each tile using the selected algorithm.
+3. For each drone image in the `Drone_images/` folder, the system attempts to find the best match among all the tiles.
+4. Match scores and metadata (including processing time and success/failure) are written to a CSV report.
+5. The process stops automatically if the total runtime exceeds 4 minutes.
 
 ---
 
-## Image Resolutions
+## Installation
 
-| Name  | Size (pixels) |
-| ----- | ------------- |
-| 720p  | 1280 × 720    |
-| 1080p | 1920 × 1080   |
-
----
-
-## How to Use
-
-### Step 1: Resize the Drone Images
-
-To generate the resized versions of your input drone images:
+### Step 1: Clone the Repository
 
 ```bash
-python3 resize.py
+git clone https://github.com/scm-vayukah/visual-navigation.git
+cd visual-navigation
 ```
 
-This creates:
-
-* `720p/drone1.JPG`, `drone2.JPG`, etc.
-* `1080p/drone1.JPG`, `drone2.JPG`, etc.
-
 ---
 
-### Step 2: Run the Location Estimation
+### Step 2: Set Up the Python Environment
 
-Choose the script that matches your system:
+#### Option A: Using Conda (Recommended for Windows)
 
-* **For CPU systems (full ortho image):**
-
-  ```bash
-  python3 estimation.py
-  ```
-
-* **For Raspberry Pi (downsampled ortho image):**
-
-  ```bash
-  python3 est.py
-  ```
-
-* **To process all images from `720p/` and `1080p/` folders:**
-
-  ```bash
-  python3 est1.py
-  ```
-
----
-
-## Output Folder Structure
-
-After processing, the `output/` folder will contain:
-
-```
-output/
-├── sift_v1/
-│   ├── drone1/
-│   │   ├── drone1.JPG   # Image with GPS overlay + EXIF metadata
-│   │   └── drone1.TIFF  # Original image with EXIF GPS
-├── 720p_sift_v1/
-│   └── ...
-├── 1080p_sift_v1/
-│   └── ...
+```bash
+conda create -n locest python=3.11
+conda activate locest
+conda install -c conda-forge gdal=3.6.0
+pip install -r requirements.txt
 ```
 
-Each subfolder contains:
+#### Option B: Using pip with Prebuilt GDAL Wheel (Windows + Python 3.11)
 
-* `.JPG`: Image with visual overlay of GPS text and embedded EXIF coordinates
-* `.TIFF`: Original image format with embedded GPS metadata
+1. Download the appropriate GDAL `.whl` file from the link below:
 
----
+   [Click here to open GDAL wheels for Windows (py311)](https://wheelhouse.openquake.org/v3/windows/py311/)
 
-## Features
+   Example file:
+   `GDAL-3.10.1-cp311-cp311-win_amd64.whl`
 
-* Uses OpenCV’s SIFT for keypoint detection and feature matching
-* Matches drone image to orthoimage using FLANN-based matcher
-* Calculates geolocation of the image center using homography and GDAL geotransform
-* Embeds GPS coordinates into EXIF
-* Displays resolution and time taken for processing
+2. Install the GDAL wheel:
 
----
+```bash
+pip install GDAL-3.10.1-cp311-cp311-win_amd64.whl
+```
 
-## Requirements
-
-Install Python dependencies with:
+3. Then install the remaining dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Make sure your system also has:
+---
 
-* Python 3.10+
-* GDAL with development headers and Python bindings
-* OpenCV (with SIFT support)
-* Pillow
-* NumPy
-* piexif
+### Step 3: Verify Installation
+
+Run the following to confirm GDAL and OpenCV are installed:
+
+```bash
+python -c "from osgeo import gdal; import cv2; print('GDAL and OpenCV installed successfully.')"
+```
 
 ---
 
+### requirements.txt
+
+> If using the pip + wheel method, do **not** include `gdal` in `requirements.txt`.
+
+```
+opencv-python
+opencv-contrib-python
+numpy
+Pillow
+```
+
+---
+
+## Running the Project
+
+```bash
+python main.py -b . -m sift -t 5000
+```
+
+### Command-Line Arguments
+
+| Argument              | Description                                                    |
+| --------------------- | -------------------------------------------------------------- |
+| `-b` or `--base_path` | Path to the base folder containing `Tiff/` and `Drone_images/` |
+| `-m` or `--model`     | Feature model to use: `sift`, `orb`, or `orb-cuda`             |
+| `-t` or `--tile_size` | Tile size in pixels (default: 5000)                            |
+
+---
+
+## Input Folders
+
+### Drone_images/
+
+Contains the input drone-captured images to be localized.
+
+**Example:**
+
+```
+Drone_images/
+├── img_1.jpg
+├── img_2.jpg
+└── img_3.jpg
+```
+
+- Supported formats: `.jpg`, `.jpeg`, `.png`
+- Avoid blurry, overexposed, or misaligned images
+
+See `Drone_images/README.md` for more information.
+
+---
+
+### Tiff/
+
+Contains a single georeferenced TIFF file used as the reference map.
+
+**Example:**
+
+```
+Tiff/
+└── drone.tif
+```
+
+- Must be orthorectified and georeferenced
+- Can be grayscale or RGB
+
+See `Tiff/README.md` for more information.
+
+---
+
+## Output
+
+Each run generates a timestamped output directory:
+
+```
+output_YYYYMMDD_HHMMSS/
+├── tiles/
+│   ├── tile_0_0.jpg
+│   ├── tile_0_0.jpg.npz
+│   └── ...
+└── report/
+    └── estimated_geolocation_match.csv
+```
+
+### CSV Report Columns
+
+- `image_name`: Name of the drone image
+- `lat`, `lon`: Placeholder values (can be updated with real geolocation)
+- `processing_time_hms`: Time in hours, minutes, seconds
+- `processing_time_sec`: Time in seconds
+- `status`: Whether matching succeeded or failed
+- `process_status`: One of `success`, `can be optimized`, `almost done`, `failure`
+
+---
+
+## Feature Matching Models
+
+- `sift`: Scale-Invariant Feature Transform (high accuracy)
+- `orb`: Oriented FAST and Rotated BRIEF (lightweight)
+- `orb-cuda`: GPU-accelerated ORB (requires CUDA-capable GPU)
+
+---
