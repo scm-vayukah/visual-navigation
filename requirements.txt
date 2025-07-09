@@ -1,6 +1,4 @@
 opencv-python
+opencv-contrib-python
 numpy
-matplotlib
-pandas
-gdal 
-piexif
+Pillow
