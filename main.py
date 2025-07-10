@@ -10,220 +10,209 @@ from osgeo import gdal
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-def pixel_to_geo(transform, x, y):
-    geo_x = transform[0] + x * transform[1] + y * transform[2]
-    geo_y = transform[3] + x * transform[4] + y * transform[5]
+def pixel_to_geo(geo_transform, px, py):
+    geo_x = geo_transform[0] + px * geo_transform[1] + py * geo_transform[2]
+    geo_y = geo_transform[3] + px * geo_transform[4] + py * geo_transform[5]
     return geo_x, geo_y
 
-def save_match_image(img1, kp1, img2, kp2, matches, save_path):
+def save_match_visualization(img1, kp1, img2, kp2, matches, output_path):
     img1 = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR) if len(img1.shape) == 2 else img1
     img2 = cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR) if len(img2.shape) == 2 else img2
 
     max_height = max(img1.shape[0], img2.shape[0])
-    if img1.shape[0] < max_height:
-        img1 = cv2.copyMakeBorder(img1, 0, max_height - img1.shape[0], 0, 0, cv2.BORDER_CONSTANT)
-    if img2.shape[0] < max_height:
-        img2 = cv2.copyMakeBorder(img2, 0, max_height - img2.shape[0], 0, 0, cv2.BORDER_CONSTANT)
+    img1 = cv2.copyMakeBorder(img1, 0, max_height - img1.shape[0], 0, 0, cv2.BORDER_CONSTANT)
+    img2 = cv2.copyMakeBorder(img2, 0, max_height - img2.shape[0], 0, 0, cv2.BORDER_CONSTANT)
 
-    concat_img = np.hstack((img1, img2))
-    for m in matches[:50]:
-        pt1 = tuple(np.round(kp1[m.queryIdx].pt).astype(int))
-        pt2 = tuple(np.round(kp2[m.trainIdx].pt).astype(int))
+    combined_img = np.hstack((img1, img2))
+    for match in matches[:50]:
+        pt1 = tuple(np.round(kp1[match.queryIdx].pt).astype(int))
+        pt2 = tuple(np.round(kp2[match.trainIdx].pt).astype(int))
         pt2 = (pt2[0] + img1.shape[1], pt2[1])
         color = tuple(np.random.randint(100, 255, 3).tolist())
-        cv2.line(concat_img, pt1, pt2, color, 2)
-        cv2.circle(concat_img, pt1, 4, color, -1)
-        cv2.circle(concat_img, pt2, 4, color, -1)
-    cv2.imwrite(save_path, concat_img)
+        cv2.line(combined_img, pt1, pt2, color, 2)
+        cv2.circle(combined_img, pt1, 4, color, -1)
+        cv2.circle(combined_img, pt2, 4, color, -1)
+    cv2.imwrite(output_path, combined_img)
 
-def try_load_full_image(path):
+def try_load_full_tiff_image(path):
     try:
-        ds = gdal.Open(path)
-        arr = ds.ReadAsArray()
-        if arr is None:
+        dataset = gdal.Open(path)
+        array = dataset.ReadAsArray()
+        if array is None:
             return None, None, None
-        img = (cv2.cvtColor(np.moveaxis(arr, 0, -1), cv2.COLOR_RGB2BGR)
-               if len(arr.shape) == 3 else
-               cv2.cvtColor(arr.astype(np.uint8), cv2.COLOR_GRAY2BGR))
-        return img, ds.GetGeoTransform(), ds
+        image = (cv2.cvtColor(np.moveaxis(array, 0, -1), cv2.COLOR_RGB2BGR)
+                 if len(array.shape) == 3 else
+                 cv2.cvtColor(array.astype(np.uint8), cv2.COLOR_GRAY2BGR))
+        return image, dataset.GetGeoTransform(), dataset
     except Exception as e:
-        logging.error(f"[ERROR] GDAL full image load failed: {e}")
+        logging.error(f"[ERROR] GDAL failed to load full image: {e}")
         return None, None, None
 
-def tile_image_and_extract_features(ds, tile_size=5000):
-    width = ds.RasterXSize
-    height = ds.RasterYSize
-    transform = ds.GetGeoTransform()
-    detector = cv2.SIFT_create()
-    tiles = []
+def tile_image_and_extract_sift(dataset, tile_size=5000):
+    width = dataset.RasterXSize
+    height = dataset.RasterYSize
+    geo_transform = dataset.GetGeoTransform()
+    sift_detector = cv2.SIFT_create()
+    tiles_features = []
 
     for y in range(0, height, tile_size):
         for x in range(0, width, tile_size):
-            w = min(tile_size, width - x)
-            h = min(tile_size, height - y)
-            tile = ds.ReadAsArray(x, y, w, h)
-            if tile is None:
+            tile_width = min(tile_size, width - x)
+            tile_height = min(tile_size, height - y)
+            tile_data = dataset.ReadAsArray(x, y, tile_width, tile_height)
+            if tile_data is None:
                 continue
-            tile_rgb = (cv2.cvtColor(np.moveaxis(tile, 0, -1), cv2.COLOR_RGB2BGR)
-                        if len(tile.shape) == 3 else
-                        cv2.cvtColor(tile.astype(np.uint8), cv2.COLOR_GRAY2BGR))
-            kp, desc = detector.detectAndCompute(tile_rgb, None)
-            if kp is not None and desc is not None:
-                tiles.append({
-                    "x": x, "y": y, "w": w, "h": h,
-                    "kp": kp, "desc": desc, "img": tile_rgb
+            tile_image = (cv2.cvtColor(np.moveaxis(tile_data, 0, -1), cv2.COLOR_RGB2BGR)
+                          if len(tile_data.shape) == 3 else
+                          cv2.cvtColor(tile_data.astype(np.uint8), cv2.COLOR_GRAY2BGR))
+            keypoints, descriptors = sift_detector.detectAndCompute(tile_image, None)
+            if keypoints is not None and descriptors is not None:
+                tiles_features.append({
+                    "x": x, "y": y, "w": tile_width, "h": tile_height,
+                    "kp": keypoints, "desc": descriptors, "img": tile_image
                 })
-    return tiles, transform
+    return tiles_features, geo_transform
 
-def clean_up_output(path):
+def clean_up(path):
     if os.path.exists(path):
         shutil.rmtree(path)
 
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("-b", "--base_path", required=True, help="Base path to folders")
+    parser.add_argument("-b", "--base_path", required=True, help="Path to the dataset base directory")
     args = parser.parse_args()
 
     base_path = args.base_path
     tiff_dir = os.path.join(base_path, "Tiff")
     drone_dir = os.path.join(base_path, "Drone_images")
 
-    ortho_path = next(
-        (os.path.join(tiff_dir, f) for f in os.listdir(tiff_dir)
-         if f.lower().startswith("drone") and f.lower().endswith((".tif", ".tiff"))),
-        None
-    )
-    if ortho_path is None or not os.path.exists(ortho_path):
-        print(f"[ERROR] {tiff_dir}/drone.tif or drone.tiff not found.")
+    ortho_path = next((os.path.join(tiff_dir, f) for f in os.listdir(tiff_dir)
+                      if f.lower().startswith("drone") and f.lower().endswith((".tif", ".tiff"))), None)
+    if not ortho_path:
+        logging.error("[ERROR] No TIFF image starting with 'drone' found.")
         return
 
-    drone_images = [os.path.join(drone_dir, f) for f in os.listdir(drone_dir)
-                    if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+    drone_image_paths = [os.path.join(drone_dir, f) for f in os.listdir(drone_dir)
+                         if f.lower().endswith((".jpg", ".jpeg", ".png"))]
 
-    # Create output structure
-    main_output = os.path.join(base_path, "Output")
-    os.makedirs(main_output, exist_ok=True)
-    output_base = os.path.join(main_output, f"output_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    os.makedirs(output_base, exist_ok=True)
+    # Prepare output structure
+    main_output_dir = os.path.join(base_path, "Output")
+    os.makedirs(main_output_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    session_output_dir = os.path.join(main_output_dir, f"output_{timestamp}")
+    os.makedirs(session_output_dir, exist_ok=True)
 
-    detector = cv2.SIFT_create()
-    ortho_img, transform, ds = try_load_full_image(ortho_path)
+    sift_detector = cv2.SIFT_create()
+    ortho_image, geo_transform, gdal_dataset = try_load_full_tiff_image(ortho_path)
     tile_mode = False
 
-    if ortho_img is not None:
+    if ortho_image is not None:
         try:
-            ortho_kp, ortho_desc = detector.detectAndCompute(ortho_img, None)
+            ortho_keypoints, ortho_descriptors = sift_detector.detectAndCompute(ortho_image, None)
         except Exception as e:
             logging.warning(f"[WARNING] Full image feature extraction failed: {e}")
-            ortho_img = None
+            ortho_image = None
 
-    if ortho_img is None:
+    if ortho_image is None:
         logging.info("[INFO] Falling back to tile-based matching...")
         tile_mode = True
-        ds = gdal.Open(ortho_path)
-        tiles, transform = tile_image_and_extract_features(ds)
+        gdal_dataset = gdal.Open(ortho_path)
+        tile_features, geo_transform = tile_image_and_extract_sift(gdal_dataset)
 
-    csv_path = os.path.join(output_base, "geolocation_report.csv")
+    csv_output_path = os.path.join(session_output_dir, "geolocation_report.csv")
+
     try:
-        with open(csv_path, "w", newline="") as csvfile:
+        with open(csv_output_path, "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow([
                 "Image Name", "Latitude", "Longitude",
-                "Processing Time (HH:MM:SS)", "Processing Time (Seconds)",
-                "Process-Status", "Status"
+                "Processing Time (HH:MM:SS)", "Seconds", "Status", "Message"
             ])
 
-            for drone_path in drone_images:
-                name = os.path.splitext(os.path.basename(drone_path))[0]
-                out_dir = os.path.join(output_base, name)
-                os.makedirs(out_dir, exist_ok=True)
+            for drone_path in drone_image_paths:
+                drone_name = os.path.splitext(os.path.basename(drone_path))[0]
+                drone_output_dir = os.path.join(session_output_dir, drone_name)
+                os.makedirs(drone_output_dir, exist_ok=True)
 
-                img = cv2.imread(drone_path)
-                if img is None:
-                    logging.error(f"[ERROR] Cannot read {drone_path}")
-                    writer.writerow([name, "", "", "", "", "failure", "failure: file read error"])
+                drone_image = cv2.imread(drone_path)
+                if drone_image is None:
+                    logging.error(f"[ERROR] Could not read {drone_path}")
+                    writer.writerow([drone_name, "", "", "", "", "Failure", "Read error"])
                     continue
 
-                h, w = img.shape[:2]
-                start = time.time()
+                start_time = time.time()
 
                 try:
-                    kp2, desc2 = detector.detectAndCompute(img, None)
-                    if desc2 is None:
+                    drone_keypoints, drone_descriptors = sift_detector.detectAndCompute(drone_image, None)
+                    if drone_descriptors is None:
                         raise ValueError("No descriptors in drone image")
 
-                    best_geo = (0.0, 0.0)
+                    best_coordinates = (0.0, 0.0)
                     best_matches = []
                     best_score = 0
-                    best_kp = None
-                    best_img = None
+                    matched_kp = None
+                    matched_image = None
 
                     if not tile_mode:
                         matcher = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
-                        matches = matcher.knnMatch(ortho_desc, desc2, k=2)
-                        good = [m for m, n in matches if m.distance < 0.75 * n.distance]
-                        if len(good) >= 4:
-                            src_pts = np.float32([ortho_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-                            dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-                            H, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-                            mapped = cv2.perspectiveTransform(np.array([[[w/2, h/2]]], dtype=np.float32), H)[0][0]
-                            geo_lon, geo_lat = pixel_to_geo(transform, mapped[0], mapped[1])
-                            save_match_image(ortho_img, ortho_kp, img, kp2, good,
-                                             os.path.join(out_dir, f"{name}_match.jpg"))
-                            best_geo = (geo_lat, geo_lon)
+                        matches = matcher.knnMatch(ortho_descriptors, drone_descriptors, k=2)
+                        good_matches = [m for m, n in matches if m.distance < 0.75 * n.distance]
+
+                        if len(good_matches) >= 4:
+                            src_pts = np.float32([ortho_keypoints[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                            dst_pts = np.float32([drone_keypoints[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                            homography, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+                            center_point = np.array([[[drone_image.shape[1] / 2, drone_image.shape[0] / 2]]], dtype=np.float32)
+                            mapped_point = cv2.perspectiveTransform(center_point, homography)[0][0]
+                            longitude, latitude = pixel_to_geo(geo_transform, mapped_point[0], mapped_point[1])
+                            save_match_visualization(ortho_image, ortho_keypoints, drone_image, drone_keypoints,
+                                                     good_matches, os.path.join(drone_output_dir, f"{drone_name}_match.jpg"))
+                            best_coordinates = (latitude, longitude)
                         else:
                             raise ValueError("Not enough good matches in full image")
+
                     else:
-                        for tile in tiles:
-                            matches = cv2.BFMatcher().knnMatch(tile["desc"], desc2, k=2)
+                        for tile in tile_features:
+                            matches = cv2.BFMatcher().knnMatch(tile["desc"], drone_descriptors, k=2)
                             good = [m for m, n in matches if m.distance < 0.75 * n.distance]
                             if len(good) > best_score:
                                 best_score = len(good)
-                                best_kp = tile["kp"]
-                                best_img = tile["img"]
+                                matched_kp = tile["kp"]
+                                matched_image = tile["img"]
                                 best_matches = good
-                                best_geo = pixel_to_geo(transform, tile["x"] + tile["w"] // 2, tile["y"] + tile["h"] // 2)
+                                best_coordinates = pixel_to_geo(geo_transform, tile["x"] + tile["w"] // 2,
+                                                                tile["y"] + tile["h"] // 2)
 
                         if best_matches:
-                            save_match_image(best_img, best_kp, img, kp2, best_matches,
-                                             os.path.join(out_dir, f"{name}_match.jpg"))
+                            save_match_visualization(matched_image, matched_kp, drone_image, drone_keypoints,
+                                                     best_matches, os.path.join(drone_output_dir, f"{drone_name}_match.jpg"))
                         else:
                             raise ValueError("Not enough good matches in tiles")
 
-                    end = time.time()
-                    elapsed = end - start
-
-                    if elapsed < 1:
-                        process_status = "success"
-                    elif elapsed < 5:
-                        process_status = "can be optimized"
-                    elif elapsed < 10:
-                        process_status = "almost done"
-                    else:
-                        process_status = "failure"
-
+                    elapsed = time.time() - start_time
                     writer.writerow([
-                        name, f"{best_geo[0]:.6f}", f"{best_geo[1]:.6f}",
+                        drone_name, f"{best_coordinates[0]:.6f}", f"{best_coordinates[1]:.6f}",
                         str(datetime.timedelta(seconds=int(elapsed))),
-                        f"{elapsed:.2f}", process_status, "success"
+                        f"{elapsed:.2f}", "Success", "Processed successfully"
                     ])
-                    logging.info(f"[{name}] Processed in {elapsed:.2f} seconds")
+                    logging.info(f"[{drone_name}] Done in {elapsed:.2f} seconds")
 
                 except Exception as e:
-                    elapsed = time.time() - start
+                    elapsed = time.time() - start_time
                     writer.writerow([
-                        name, "", "", str(datetime.timedelta(seconds=int(elapsed))),
-                        f"{elapsed:.2f}", "failure", f"failure: {str(e)}"
+                        drone_name, "", "",
+                        str(datetime.timedelta(seconds=int(elapsed))),
+                        f"{elapsed:.2f}", "Failure", str(e)
                     ])
-                    logging.error(f"[{name}] Failed: {e}")
+                    logging.error(f"[{drone_name}] Error: {e}")
 
     except Exception as e:
-        logging.error(f"[ERROR] {e}. Cleaning up output...")
-        clean_up_output(output_base)
+        logging.error(f"[FATAL] {e}. Cleaning up...")
+        clean_up(session_output_dir)
         return
 
-    logging.info(f"[INFO] Completed successfully. Output saved to: {output_base}")
+    logging.info(f"[INFO] All done. Output stored at: {session_output_dir}")
 
 if __name__ == "__main__":
     main()
