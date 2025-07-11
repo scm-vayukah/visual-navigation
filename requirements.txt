@@ -1,4 +1,18 @@
-opencv-python
-opencv-contrib-python
-numpy
-Pillow
+# Core image and array processing
+opencv-python==4.9.0.80
+Pillow==10.2.0
+numpy==1.26.4
+
+# Geospatial image handling
+#GDAL==3.8.4
+
+# SuperPoint model
+transformers==4.41.2
+torch==2.3.0
+accelerate==0.31.0
+
+# Logging and progress
+tqdm==4.66.4
+
+# Optional (for clean console logs)
+colorlog==6.8.2

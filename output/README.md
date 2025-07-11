@@ -1,49 +1,48 @@
+
 # 📁 Output Folder
 
-This folder stores the results generated after each run of the geolocation pipeline.
+This folder stores the results generated after each run of the SuperPoint-based geolocation pipeline.
 
 ---
 
 ## 📂 Structure
 
 ```
-
 Output/
-└── output_YYYYMMDD_HHMMSS/
-├── \<image1_name>/
-│   └── \<image1_name>_match.jpg
-├── \<image2_name>/
-│   └── \<image2_name>_match.jpg
-└── geolocation_report.csv
-
+└── matched_coordinates.csv
 ```
 
-Each run generates a new folder with a timestamp (`output_YYYYMMDD_HHMMSS`) inside the `Output/` directory.
+The `matched_coordinates.csv` file is regenerated for **each run** and stores the geolocation output for all drone images processed in that run.
+
+> 🗑️ If the process fails or is interrupted, the entire `Output/` folder is automatically deleted to ensure cleanup.
 
 ---
 
 ## 📄 Contents
 
-### 🔹 Match Images
+### 🔹 `matched_coordinates.csv`
 
-- Visual representation of feature matches between:
-  - Drone image
-  - Reference map (TIFF or tile)
-- Useful for visual verification of geolocation quality
+This CSV file contains the result of the geolocation pipeline for each drone image.
 
-### 🔹 `geolocation_report.csv`
-
-This CSV file includes:
-
-| Column Name             | Description                                      |
-|-------------------------|--------------------------------------------------|
-| `Image Name`            | Name of the input drone image                    |
-| `Latitude`, `Longitude` | Estimated coordinates from the matched location |
-| `Processing Time (HH:MM:SS)` | Time in hours:minutes:seconds               |
-| `Processing Time (Seconds)`  | Time in float seconds                      |
-| `Process-Status`        | Based on speed (`success`, `can be optimized`, `failure`, etc.) |
-| `Status`                | `success` or `failure: <reason>`                |
+| Column Name             | Description                                          |
+| ----------------------- | ---------------------------------------------------- |
+| `Image`                 | Name of the input drone image                        |
+| `Latitude`, `Longitude` | Estimated coordinates from the best matched keypoint |
+| `Time(hh:mm:ss)`        | Processing time in `HH:MM:SS` format                 |
+| `Time(s)`               | Processing time in seconds (float)                   |
+| `Status`                | Either `success` or `failure: <reason>`              |
+| `Process_Status`        | Performance indicator based on processing time       |
 
 ---
 
+### 🔹 `Process_Status` Values
+
+| Time Taken  | Process Status                | Description                            |
+| ----------- | ----------------------------- | -------------------------------------- |
+| `< 1 sec`   | `<1 second success`           | Extremely fast and accurate            |
+| `< 5 sec`   | `<5 seconds can be optimised` | Acceptable but may benefit from tuning |
+| `< 10 sec`  | `<10 seconds almost done`     | Near timeout; check performance        |
+| `>= 10 sec` | `else failure`                | Slow or failed due to matching issues  |
+
+---
 

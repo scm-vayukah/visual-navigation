@@ -1,6 +1,6 @@
-# Drone Image Geolocation
+# 🛰️ Drone Image Geolocation with SuperPoint
 
-This project implements a drone visual localization system by matching input drone images against a georeferenced TIFF map image. It estimates GPS coordinates using SIFT-based feature matching. The system falls back to tile-based matching if the TIFF is too large to load entirely into memory.
+This project implements a visual geolocation system using SuperPoint-based feature matching between drone images and a georeferenced TIFF map. It estimates GPS coordinates for each drone image using keypoint matching and falls back to tile-based processing if the TIFF image is too large to load entirely.
 
 ---
 
@@ -8,39 +8,36 @@ This project implements a drone visual localization system by matching input dro
 
 ```
 visual-navigation/
-├── main.py                 # Main geolocation pipeline 
+├── main.py                 # SuperPoint geolocation pipeline
 ├── requirements.txt        # Python dependencies
 ├── Drone_images/           # Input drone images
-│   └── README.md
 ├── Tiff/                   # Georeferenced TIFF map
-│   └── README.md
-└── Output/                 # Output results per run
-    └── README.md
+└── Output/                 # Auto-generated geolocation results
 ```
 
 ---
 
 ## ⚙️ How It Works
 
-1. The TIFF image is loaded using GDAL.
-2. If full-image loading fails, it's automatically divided into tiles.
-3. SIFT features are extracted from the full image or each tile.
-4. For every image in `Drone_images/`, the system attempts to find the best match in the TIFF.
-5. GPS coordinates are calculated from the matched location using the image transform.
-6. Results (matches, images, and CSV) are saved in `Output/output_YYYYMMDD_HHMMSS/`.
+1. Loads the georeferenced TIFF using GDAL.
+2. If the full TIFF can't be loaded into memory, tiles it (default size: 5000x5000).
+3. Uses Hugging Face `magic-leap-community/superpoint` model to extract keypoints & descriptors.
+4. Matches drone image features with TIFF features using FLANN (or BF fallback).
+5. Converts matched pixel location to GPS coordinates using the TIFF’s geotransform.
+6. Results are saved to `Output/matched_coordinates.csv`.
 
 ---
 
 ## ✅ Installation
 
-### Step 1: Clone the Repository
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/scm-vayukah/visual-navigation.git
 cd visual-navigation
 ```
 
-### Step 2: Set Up Python Environment
+### 2. Set Up Python Environment
 
 #### Option A: Conda (Recommended)
 
@@ -51,22 +48,15 @@ conda install -c conda-forge gdal=3.6.0
 pip install -r requirements.txt
 ```
 
-#### Option B: pip + GDAL Wheel (Windows)
+#### Option B: pip + GDAL Wheel (for Windows)
 
-1. Download GDAL wheel: [OpenQuake GDAL Wheels (py311)](https://wheelhouse.openquake.org/v3/windows/py311/)
-
+1. Download [GDAL .whl for Python 3.11](https://www.lfd.uci.edu/~gohlke/pythonlibs/#gdal)
 
 2. Install:
 
 ```bash
 pip install GDAL-3.10.1-cp311-cp311-win_amd64.whl
 pip install -r requirements.txt
-```
-
-### Step 3: Verify
-
-```bash
-python -c "from osgeo import gdal; import cv2; print('GDAL and OpenCV OK')"
 ```
 
 ---
@@ -78,80 +68,79 @@ opencv-python
 opencv-contrib-python
 numpy
 Pillow
+transformers
+tqdm
 ```
 
-> ⚠️ Do not include `gdal` here if installed via `.whl`
+> ⚠️ Do NOT include `gdal` in `requirements.txt` if you install it via wheel or conda separately.
 
 ---
 
 ## ▶️ Usage
 
+Run the geolocation pipeline:
+
 ```bash
-python main.py -b .
+python main.py --base .
 ```
 
-### Arguments
-
-| Argument            | Description                           |
-| ------------------- | ------------------------------------- |
-| `-b`, `--base_path` | Path with `Tiff/` and `Drone_images/` |
+| Argument | Description                                           |
+| -------- | ----------------------------------------------------- |
+| `--base` | Base directory containing `Tiff/` and `Drone_images/` |
 
 ---
 
-## 📂 Input Structure
+## 📂 Input
 
 ### `Drone_images/`
 
-* Contains `.jpg`, `.jpeg`, `.png`
-* Avoid blurry or distorted images
+* Contains `.jpg`, `.jpeg`, or `.png` drone images.
 
 ### `Tiff/`
 
-* Must contain one `drone.tif` or `drone.tiff`
-* Must be georeferenced (orthorectified)
+* Contains a single `.tif` or `.tiff` file.
+* Must be georeferenced (orthorectified) with valid geotransform metadata.
 
 ---
 
 ## 📤 Output
 
-Each run creates:
+After each run:
 
 ```
 Output/
-└── output_YYYYMMDD_HHMMSS/
-    ├── <image1>/
-    │   └── img1_match.jpg
-    ├── <image2>/
-    │   └── img2_match.jpg
-    └── geolocation_report.csv
+└── matched_coordinates.csv
 ```
 
 ### CSV Columns
 
-* `Image Name`
-* `Latitude`, `Longitude`
-* `Processing Time (HH:MM:SS)`
-* `Processing Time (Seconds)`
-* `Process-Status`:
+| Column           | Description                                         |
+| ---------------- | --------------------------------------------------- |
+| `Image`          | Drone image filename                                |
+| `Latitude`       | Estimated latitude from match                       |
+| `Longitude`      | Estimated longitude from match                      |
+| `Time(hh:mm:ss)` | Processing time in human-readable format            |
+| `Time(s)`        | Processing time in seconds                          |
+| `Status`         | `success` or `failure: <reason>`                    |
+| `Process_Status` | Performance classification based on processing time |
 
-  * `< 1 sec` → `success`
-  * `< 5 sec` → `can be optimized`
-  * `< 10 sec` → `almost done`
-  * `>= 10 sec` → `failure`
-* `Status`:
+#### Process Status Categories
 
-  * `success`
-  * `failure: <reason>` (e.g. file read error, no descriptors)
-
----
-
-## 🔍 Feature Matching
-
-* Uses **SIFT** (Scale-Invariant Feature Transform)
-* Tile-based fallback used only if full image fails to load
+| Time Taken | Process Status                |
+| ---------- | ----------------------------- |
+| < 1 sec    | `<1 second success`           |
+| < 5 sec    | `<5 seconds can be optimised` |
+| < 10 sec   | `<10 seconds almost done`     |
+| >= 10 sec  | `else failure`                |
 
 ---
 
+## 🧠 Feature Matching Details
 
+* **Keypoints & Descriptors**: Extracted using Hugging Face’s `SuperPoint` model.
+* **Matcher**: FLANN-based KNN matcher (fallback to brute-force if needed).
+* **Fallback Tiling**: Automatically tiles TIFF if full load fails.
+
+---
 
 
