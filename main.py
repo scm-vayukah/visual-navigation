@@ -30,13 +30,13 @@ def extract_features_from_image(model, processor, image_input):
     outputs = model(**inputs)
     size = (image.height, image.width)
     processed = processor.post_process_keypoint_detection(outputs, [size])[0]
-    kpts = processed['keypoints'].detach().numpy()
-    descs = processed['descriptors'].detach().numpy()
-    logging.debug(f"Extracted {len(kpts)} keypoints")
-    return kpts, descs
+    keypoints = processed['keypoints'].detach().numpy()
+    descriptors = processed['descriptors'].detach().numpy()
+    logging.debug(f"Extracted {len(keypoints)} keypoints")
+    return keypoints, descriptors
 
-def match_features(descriptors1, descriptors2):
-    if descriptors1.shape[1] != 256 or descriptors2.shape[1] != 256:
+def match_features(drone_descriptors, ortho_descriptors):
+    if drone_descriptors.shape[1] != 256 or ortho_descriptors.shape[1] != 256:
         raise ValueError("Descriptor size must be 256 for SuperPoint")
 
     FLANN_INDEX_KDTREE = 1
@@ -45,41 +45,41 @@ def match_features(descriptors1, descriptors2):
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
     logging.debug("Running FLANN matcher")
-    matches = flann.knnMatch(descriptors1.astype(np.float32), descriptors2.astype(np.float32), k=2)
+    matches = flann.knnMatch(drone_descriptors.astype(np.float32), ortho_descriptors.astype(np.float32), k=2)
     good_matches = [m[0] for m in matches if len(m) == 2 and m[0].distance < 0.85 * m[1].distance]
 
     if len(good_matches) == 0:
         logging.warning("No good matches with FLANN. Trying BFMatcher fallback...")
         bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-        matches = bf.match(descriptors1.astype(np.float32), descriptors2.astype(np.float32))
+        matches = bf.match(drone_descriptors.astype(np.float32), ortho_descriptors.astype(np.float32))
         good_matches = sorted(matches, key=lambda x: x.distance)[:5]
 
     logging.debug(f"Found {len(good_matches)} good matches")
     return good_matches
 
-def try_load_full_tiff(tiff_path):
+def try_load_full_tiff(ortho_path):
     try:
-        dataset = gdal.Open(tiff_path)
+        dataset = gdal.Open(ortho_path)
         if not dataset:
             raise RuntimeError("GDAL failed to open image")
-        image = dataset.ReadAsArray()
-        if image.ndim == 3:
-            image = np.transpose(image, (1, 2, 0))
-        elif image.ndim == 2:
-            image = np.expand_dims(image, axis=-1)
-        logging.info("Loaded full TIFF image successfully")
-        return image, dataset
+        ortho_array = dataset.ReadAsArray()
+        if ortho_array.ndim == 3:
+            ortho_array = np.transpose(ortho_array, (1, 2, 0))
+        elif ortho_array.ndim == 2:
+            ortho_array = np.expand_dims(ortho_array, axis=-1)
+        logging.info("Loaded full orthophoto image successfully")
+        return ortho_array, dataset
     except Exception as e:
-        logging.warning(f"Could not load full TIFF: {e}")
+        logging.warning(f"Could not load full orthophoto: {e}")
         return None, None
 
-def tile_image(tiff_path, tile_size):
-    logging.info("Tiling TIFF image...")
-    dataset = gdal.Open(tiff_path)
+def tile_orthophoto(ortho_path, tile_size):
+    logging.info("Tiling orthophoto image...")
+    dataset = gdal.Open(ortho_path)
     width = dataset.RasterXSize
     height = dataset.RasterYSize
-    image_tiles = []
-    transform = dataset.GetGeoTransform()
+    ortho_tiles = []
+    geo_transform = dataset.GetGeoTransform()
 
     for y in range(0, height, tile_size):
         for x in range(0, width, tile_size):
@@ -90,10 +90,10 @@ def tile_image(tiff_path, tile_size):
                 tile = np.transpose(tile, (1, 2, 0))
             elif tile.ndim == 2:
                 tile = np.expand_dims(tile, axis=-1)
-            image_tiles.append(((x, y), tile))
+            ortho_tiles.append(((x, y), tile))
 
-    logging.info(f"Generated {len(image_tiles)} tiles")
-    return image_tiles, transform
+    logging.info(f"Generated {len(ortho_tiles)} tiles")
+    return ortho_tiles, geo_transform
 
 def main():
     import argparse
@@ -107,7 +107,7 @@ def main():
     )
 
     base_path = args.base
-    tiff_folder = os.path.join(base_path, 'Tiff')
+    ortho_folder = os.path.join(base_path, 'Tiff')
     drone_folder = os.path.join(base_path, 'Drone_images')
     output_folder = os.path.join(base_path, "Output")
 
@@ -116,54 +116,54 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
 
     try:
-        tiff_image_path = next((os.path.join(tiff_folder, f) for f in os.listdir(tiff_folder)
-                                if f.lower().endswith(('.tif', '.tiff'))), None)
-        if not tiff_image_path:
-            raise FileNotFoundError("No TIFF image found in Tiff folder")
+        ortho_path = next((os.path.join(ortho_folder, f) for f in os.listdir(ortho_folder)
+                           if f.lower().endswith(('.tif', '.tiff'))), None)
+        if not ortho_path:
+            raise FileNotFoundError("No orthophoto TIFF image found in Tiff folder")
 
         processor = AutoImageProcessor.from_pretrained("magic-leap-community/superpoint")
         model = SuperPointForKeypointDetection.from_pretrained("magic-leap-community/superpoint")
 
-        tiff_image, dataset = try_load_full_tiff(tiff_image_path)
-        if tiff_image is not None:
-            pil_image = Image.fromarray(tiff_image[:, :, :3])
-            tiff_kpts, tiff_descs = extract_features_from_image(model, processor, pil_image)
-            transform = dataset.GetGeoTransform()
+        ortho_image, dataset = try_load_full_tiff(ortho_path)
+        if ortho_image is not None:
+            ortho_pil = Image.fromarray(ortho_image[:, :, :3])
+            ortho_keypoints, ortho_descriptors = extract_features_from_image(model, processor, ortho_pil)
+            geo_transform = dataset.GetGeoTransform()
         else:
-            tiles, transform = tile_image(tiff_image_path, tile_size=1024)
-            tiff_kpts = []
-            tiff_descs = []
-            for (x_off, y_off), tile_img in tiles:
-                pil_tile = Image.fromarray(tile_img[:, :, :3])
-                kp, desc = extract_features_from_image(model, processor, pil_tile)
-                kp[:, 0] += x_off
-                kp[:, 1] += y_off
-                tiff_kpts.append(kp)
-                tiff_descs.append(desc)
-            tiff_kpts = np.vstack(tiff_kpts)
-            tiff_descs = np.vstack(tiff_descs)
+            tiles, geo_transform = tile_orthophoto(ortho_path, tile_size=1024)
+            all_keypoints = []
+            all_descriptors = []
+            for (x_offset, y_offset), tile_img in tiles:
+                tile_pil = Image.fromarray(tile_img[:, :, :3])
+                kps, descs = extract_features_from_image(model, processor, tile_pil)
+                kps[:, 0] += x_offset
+                kps[:, 1] += y_offset
+                all_keypoints.append(kps)
+                all_descriptors.append(descs)
+            ortho_keypoints = np.vstack(all_keypoints)
+            ortho_descriptors = np.vstack(all_descriptors)
 
         output_csv_path = os.path.join(output_folder, "matched_coordinates.csv")
-        drone_images = [f for f in os.listdir(drone_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        drone_image_files = [f for f in os.listdir(drone_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
 
         with open(output_csv_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(["Image", "Latitude", "Longitude", "Time(hh:mm:ss)", "Time(s)", "Status", "Process_Status"])
 
-            for drone_img_name in tqdm(drone_images):
-                drone_img_path = os.path.join(drone_folder, drone_img_name)
+            for drone_filename in tqdm(drone_image_files):
+                drone_image_path = os.path.join(drone_folder, drone_filename)
 
                 try:
                     start_time = time.time()
-                    logging.debug(f"Processing image: {drone_img_name}")
-                    drone_kpts, drone_descs = extract_features_from_image(model, processor, drone_img_path)
-                    matches = match_features(drone_descs, tiff_descs)
+                    logging.debug(f"Processing drone image: {drone_filename}")
+                    drone_keypoints, drone_descriptors = extract_features_from_image(model, processor, drone_image_path)
+                    matches = match_features(drone_descriptors, ortho_descriptors)
 
                     if not matches:
                         raise ValueError("No good matches found")
 
-                    matched_kp = tiff_kpts[matches[0].trainIdx]
-                    lon, lat = pixel_to_geo(transform, matched_kp[0], matched_kp[1])
+                    best_match_kp = ortho_keypoints[matches[0].trainIdx]
+                    longitude, latitude = pixel_to_geo(geo_transform, best_match_kp[0], best_match_kp[1])
 
                     end_time = time.time()
                     elapsed = end_time - start_time
@@ -178,13 +178,13 @@ def main():
                     else:
                         process_status = "else failure"
 
-                    writer.writerow([drone_img_name, lat, lon, hhmmss, f"{elapsed:.2f}", "success", process_status])
+                    writer.writerow([drone_filename, latitude, longitude, hhmmss, f"{elapsed:.2f}", "success", process_status])
 
                 except Exception as e:
                     elapsed = time.time() - start_time
                     hhmmss = time.strftime("%H:%M:%S", time.gmtime(elapsed))
                     process_status = "else failure"
-                    writer.writerow([drone_img_name, "", "", hhmmss, f"{elapsed:.2f}", f"failure: {str(e)}", process_status])
+                    writer.writerow([drone_filename, "", "", hhmmss, f"{elapsed:.2f}", f"failure: {str(e)}", process_status])
 
     except Exception as e:
         logging.error(f"Process failed: {e}")
